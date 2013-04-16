@@ -1,5 +1,5 @@
-SVT Crawler
+Öppet arkiv crawler
 =============
 
-SVT Crawler är en webspindel som indexerar SVT Play.
+Detta är en webspindel som indexerar SVTs Öppet Arkiv.
 
