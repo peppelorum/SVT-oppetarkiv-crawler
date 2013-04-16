@@ -106,19 +106,11 @@ def sanitize_description(value):
 
     return cleaned.html().split('<span>')[-1:][0].replace('</span>', '')
 
-class Category:
-    def __init__(self, title, url, html_class, thumbnail):
-        self.title = title
-        self.url = url
-        self.html_class = html_class
-        self.thumbnail = thumbnail
-
 
 class Show:
     def __init__(self, title, url, thumbnail):
         self.title = title
         self.url = url
-        self.thumbnail = thumbnail
 
 
 class Episode:
@@ -126,16 +118,14 @@ class Episode:
 
 
 class Episodes:
-    def __init__(self, crawler, url, kind_of):
+    def __init__(self, crawler, url):
         self.crawler = crawler
         self.i = 0
-        self.kind_of = kind_of
+        self.kind_of = 'ee'
 
         self.episodes = PyQuery(url)
-        if kind_of == 'episodes':
-            self.episodes_iter = self.episodes.find('.svtTab-1.playBoxBody').find('article.svtUnit')
-        else:
-            self.episodes_iter = self.episodes.find('.svtTab-2.playBoxBody').find('article.svtUnit')
+        self.episodes_iter = self.episodes.find('article.svtUnit')
+
 
     def __iter__(self):
         return self
@@ -152,30 +142,9 @@ class Episodes:
 
         # Parse the current episode from the long list of episodes
         article = PyQuery(link)
-        episode = article.find('a.playLink')
-        full_url = self.crawler.baseurl + article.find('a.playLink').attr('href')
+        episode = article.find('a')
+        full_url = article.find('a').attr('href')
         broadcasted = article.find('time').attr('datetime')
-        episode_date = parse(broadcasted).replace(tzinfo=None)
-        published = article.attr('data-published')
-
-        if published.find('idag') != -1:
-            published = '%s' % datetime.today()
-
-        try:
-            published_date = parse(published, parserinfo=sverje()).replace(tzinfo=None)
-        except ValueError as err:
-            print err
-            print published
-
-        if self.crawler.min is not None:
-            if published_date < self.crawler.min:
-                self.i += 1
-                return self.next()
-
-        if self.crawler.max is not None:
-            if published_date > self.crawler.max:
-                self.i += 1
-                return self.next()
 
         if len(broadcasted) < 1:
             broadcasted = '1970-01-01 00:00:00'
@@ -186,104 +155,52 @@ class Episodes:
         else:
             url = full_url
 
-        if (url.find('video') != -1 or url.find('klipp') != -1) and len(broadcasted) > 1:
+        if (url.find('video') != -1) and len(broadcasted) > 1:
 
             available = parse_date(article.attr('data-available'), '+')
-            length = article.attr('data-length')
 
-            if not episode.attr('href').startswith('http'):
-                try:
-                    # Get the episode from url
-                    article_full = PyQuery(url)
-                    thumbnail = article_full.find('img.svtHide-No-Js').eq(0).attr('data-imagename')
-                    meta = article_full.find('.playVideoMetaInfo div')
+            try:
+                # Get the episode from url
+                article_full = PyQuery(url)
+                thumbnail = article_full.find('img.svtHide-No-Js').eq(0).attr('data-imagename')
+                playerLink = article_full.find('a#player')
+                if PyQuery(playerLink).attr('data-available-on-mobile'):
+                    on_device = 1
+                else:
+                    on_device = 2
 
-                    episode = Episode()
+                desc = article_full.find('.svt-text-bread').text()
+                desc = sanitize_description(unicode(desc))
+                episodeTitle = article_full.find('title').eq(0).text().replace('| oppetarkiv.se', '')
+                length = playerLink.attr('data-length')
 
-                    desc = article_full.find('.playVideoInfo p').text()
-                    if len(desc) == 0:
-                        desc = article_full.find('.playVideoInfo span')
-                    desc = sanitize_description(unicode(desc))
+                episode = Episode()
+                episode.title = episodeTitle
+                episode.title_slug = shellquote(episodeTitle)
+                episode.http_status = 200
+                episode.http_status_checked_date = datetime.utcnow().replace(tzinfo=utc)
+                episode.date_available_until = available
+                episode.date_broadcasted = broadcasted
+                episode.length = length
+                episode.description = desc
+                episode.viewable_on_device = on_device
+                # episode.viewable_in = rights
+                episode.kind_of = self.kind_of
+                episode.thumbnail_url = thumbnail
 
-                    if str(meta).find('Kan endast ses i Sverige') == -1:
-                        rights = 1
-                    else:
-                        rights = 2
+                self.i += 1
+                return episode
 
-                    if str(meta).find('Kan ses i mobilen') > -1:
-                        on_device = 1
-                    else:
-                        on_device = 2
-
-                    episodeTitle = article_full.find('title').eq(0).text().replace('| SVT Play', '')
-                    episode.title = episodeTitle
-                    episode.published = published
-                    episode.published_date = published_date
-                    episode.title_slug = shellquote(episodeTitle)
-                    episode.http_status = 200
-                    episode.http_status_checked_date = datetime.utcnow().replace(tzinfo=utc)
-                    episode.date_available_until = available
-                    episode.date_broadcasted = broadcasted
-                    episode.length = length
-                    episode.description = desc
-                    episode.viewable_on_device = on_device
-                    episode.viewable_in = rights
-                    episode.kind_of = self.kind_of
-                    episode.thumbnail_url = thumbnail
-
-                    self.i += 1
-                    return episode
-
-                except HTTPError as err:
-                    self.i += 1
-                    return self.next()
+            except HTTPError as err:
+                self.i += 1
+                return self.next()
 
 
 class Shows:
-    def __init__(self, crawler, url):
-        self.crawler = crawler
-        self.i = 0
-
-        self.shows = PyQuery(url)
-        self.shows_iter = self.shows.find('.playBoxBody.svtTab-1 article.svtUnit')
-
-    def __iter__(self):
-        return self
-
-    def next(self):
-        if self.i == self.shows_iter.length:
-            raise StopIteration
-
-        # Index all shows
-        link = self.shows_iter[self.i]
-        article = PyQuery(link)
-        url = article.find('a.playLink').attr('href')
-
-        if url:
-            show_url = self.crawler.baseurl + url
-            show_title = article.text()
-            thumbnail_url = article.find('img.playGridThumbnail').attr('src').replace('medium', 'large')
-
-            if thumbnail_url.find('http') == -1:
-                thumbnail_url = self.crawler.baseurl + thumbnail_url
-
-            show = Show(title=show_title, url=show_url, thumbnail=thumbnail_url)
-
-            episodes_url = show_url + '?tab=episodes&sida=1000'
-            clip_url = show_url + '?tab=clips&sida=1000'
-
-            show.episodes = Episodes(self.crawler, episodes_url, 'episodes')
-            show.clips = Episodes(self.crawler, clip_url, 'clips')
-
-            self.i += 1
-            return show
-
-
-class Categories:
     def __init__(self, crawler):
         self.crawler = crawler
         self.categories = PyQuery(self.crawler.url)
-        self.categories_iter = self.categories.find("a.playCategoryLink")
+        self.categories_iter = self.categories.find("li.svtoa-anchor-list-item a")
         self.i = 0
 
     def __iter__(self):
@@ -299,24 +216,22 @@ class Categories:
         href = py_link.attr('href')
         html_class = href.split('/')[-1:][0]
         title = py_link.text()
-        thumbnail_url = self.crawler.baseurl + PyQuery(link).find('img').attr('src')
-        url = self.crawler.category_url % href
+        # thumbnail_url = self.crawler.baseurl + PyQuery(link).find('img').attr('src')
+        url = href
 
-        category = Category(title, url, html_class, thumbnail_url)
-        category.shows = Shows(self.crawler, url)
+        show = Show(title, url, html_class)
+        show.clips = Episodes(self.crawler, url)
 
         self.i += 1
-        return category
+        return show
 
 
 class SvtCrawler:
-    def __init__(self, max_timestamp, min_timestamp):
+    def __init__(self):
         self.timezone = 'Europe/Stockholm'
         self.baseurl = 'http://www.svtplay.se'
-        self.url = 'http://www.svtplay.se/program'
+        self.url = 'http://www.oppetarkiv.se/kategori/titel'
         self.category_url = 'http://www.svtplay.se%s/?tab=titles&sida=1000'
-        self.max = max_timestamp
-        self.min = min_timestamp
 
-        self.categories = Categories(self)
+        self.shows = Shows(self)
 
